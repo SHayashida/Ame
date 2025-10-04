@@ -28,10 +28,10 @@ const CONFIG = {
 		ringFalloff: 0.55
 	},
 	evaporation: {
-		baseRate: 0.000045,
-		variance: 0.00012,
-		heatPulseAmplitude: 0.000025,
-		heatPulsePeriodMs: 24000
+		baseRate: 0.00002,
+		variance: 0.00005,
+		heatPulseAmplitude: 0.000012,
+		heatPulsePeriodMs: 32000
 	},
 	shading: {
 		darkening: 0.58,
@@ -286,9 +286,10 @@ function buildSupportMaps() {
 			absorptionMap[index] = (0.55 + tonal * 0.35 + microChannel * CONFIG.wetting.microChannelStrength) *
 				(0.9 + (1 - edge) * 0.25);
 
-			evaporationMap[index] = CONFIG.evaporation.baseRate +
-				CONFIG.evaporation.variance * (0.3 + tonal * 0.7) +
-				CONFIG.evaporation.baseRate * (edge * CONFIG.shading.edgeDarken + slope * 0.55);
+			const baseEvap = CONFIG.evaporation.baseRate +
+				CONFIG.evaporation.variance * (0.3 + tonal * 0.7);
+			const bias = CONFIG.evaporation.baseRate * (edge * CONFIG.shading.edgeDarken + slope * 0.55);
+			evaporationMap[index] = (baseEvap + bias) * 0.55;
 		}
 	}
 }
@@ -522,26 +523,26 @@ function renderFrame() {
 function renderOverlays() {
 	if (droplets.length) {
 		ctx.save();
-		ctx.globalCompositeOperation = 'screen';
+		ctx.globalCompositeOperation = 'multiply';
 		ctx.lineWidth = Math.max(1, pixelRatio * 1.1);
 		ctx.lineCap = 'round';
 
 		const maxTail = fallScale * CONFIG.overlay.tailMaxRatio;
 		for (const droplet of droplets) {
 			const heightRatio = clamp01(droplet.height / (fallScale * CONFIG.rain.spawnHeightMax));
-			const alpha = CONFIG.overlay.dropletAlpha * (0.2 + heightRatio);
+			const alpha = CONFIG.overlay.dropletAlpha * (0.25 + heightRatio);
 			if (alpha <= 0.02) continue;
-			const tail = clamp(droplet.height * 0.6, droplet.radius * 1.2, maxTail);
+			const tail = clamp(droplet.height * 0.65, droplet.radius * 1.2, maxTail);
 
-			ctx.strokeStyle = `rgba(180, 200, 230, ${alpha})`;
+			ctx.strokeStyle = `rgba(25, 28, 34, ${alpha * 1.35})`;
 			ctx.beginPath();
 			ctx.moveTo(droplet.x, droplet.y - tail);
 			ctx.lineTo(droplet.x, droplet.y);
 			ctx.stroke();
 
-			ctx.fillStyle = `rgba(220, 235, 255, ${alpha * 1.4})`;
+			ctx.fillStyle = `rgba(12, 14, 18, ${alpha * 1.6})`;
 			ctx.beginPath();
-			ctx.arc(droplet.x, droplet.y, Math.max(0.8, droplet.radius * 0.35), 0, Math.PI * 2);
+			ctx.arc(droplet.x, droplet.y, Math.max(0.8, droplet.radius * 0.38), 0, Math.PI * 2);
 			ctx.fill();
 		}
 		ctx.restore();
