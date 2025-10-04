@@ -1,43 +1,13 @@
-# 雨が染みるコンクリート面 — Rain on Concrete Digital Art
+# Ame — Rain on Concrete
 
-上空から見下ろしたコンクリートスラブに雨が降り注ぎ、滴が染み込み、熱で乾いていく循環をリアルタイムに描くジェネレーティブ・アートです。俯瞰視点で濡れムラや蒸発の揺らぎ、排水方向へのじわりとした流れを観察できます。
+A generative art piece that mimics the quiet, cyclical beauty of nature: rain soaking into concrete, spreading, and evaporating under unseen heat. Observed from above, each droplet darkens the surface on impact, diffusing through invisible micro-channels until the slab is fully saturated. Then the rain begins to dance—an endless, meditative rhythm inviting you to watch without thought.
 
-## 主な表現と仕組み
+## Concept
 
-- **俯瞰視点の陰影**: コンクリート面の中央と縁に異なる明暗を与え、平面でありながら奥行きと重さを感じるよう調整。
-- **雨粒の落下と着弾**: 炭のように暗い滴が尾を引きながら落下し、着弾時には控えめなフラッシュが走ります。俯瞰でも雨脚が感じ取れる彩度とコントラストに調整。
-- **濡れと乾きのシミュレーション**: ピクセル単位の濡れ度マップで暗さ・彩度を変化させ、熱パルスによる蒸発と個別の乾燥速度を再現。最近のアップデートでベースの蒸発速度を抑え、濡れ面がより長く残るようになりました。
-- **毛細管拡散と排水バイアス**: 水分が微小なクラックや排水方向に引き寄せられるよう、拡散計算とバイアス付きフローを組み合わせ。
-- **テクスチャとノイズ**: 実写テクスチャ（`concrete.jpeg`）をベースに粒状ノイズやクラック描画を重ね、素材感を維持しつつテクスチャ欠損時は手続き的に代替生成。
+*Ame* explores the poetics of natural process through computational simulation. Rain is ephemeral, concrete inert—yet together they create a living surface that breathes. The piece slows time, amplifying overlooked transitions: the fleeting darkness of wetness, the subtle creep of capillary flow, the slow fade as heat reclaims the stone. By isolating and magnifying these quiet phenomena, *Ame* offers a space for contemplation—a digital haiku that asks us to simply be present and observe.
 
-## 使い方
+## Credits
 
-1. 任意の静的サーバーで `index.html` を開きます。macOS での簡易プレビュー例:
-
-   ```bash
-   cd /path/to/Ame
-   python3 -m http.server 8000
-   ```
-
-2. ブラウザで `http://localhost:8000` を開くと、アニメーションが始まります。
-3. ウィンドウサイズに応じて自動的にリサイズされます。
-
-> **ヒント**: 長時間眺めると、雨量が増えて全面がじわじわと濡れていく変化がより鮮明に感じられます。
-
-## カスタマイズのヒント
-
-- 乾く速度をさらに調整したい場合は、`main.js` 冒頭の `CONFIG.evaporation` セクションで `baseRate` や `variance` を変更してください。数値を小さくすると乾きが遅くなります。
-- 雨粒の濃さや尾の長さは `CONFIG.overlay` と `renderOverlays()` 内のカラー設定で制御できます。`tailMaxRatio` を上げると尾が長くなり、`dropletAlpha` を変えるとコントラストが変わります。
-- 面全体の吸水バランスを変えたいときは `CONFIG.wetting` の `depositScale` や `diffusionRate` が有効です。
-
-## GitHub Pages での公開
-
-1. このリポジトリを GitHub にプッシュします。
-2. GitHub リポジトリの設定で **Pages** を開き、**Branch** を `main`（または公開したいブランチ）、フォルダーを `/ (root)` に設定して保存します。
-3. 数分後、表示された URL で作品が閲覧できます。
-
-## Thanks
-
-[Photo courtesy of Unsplash (ID: cPZ21gvclO8)](https://unsplash.com/ja/%E5%86%99%E7%9C%9F/%E7%81%B0%E8%89%B2%E3%81%AE%E5%A4%A7%E7%90%86%E7%9F%B3%E3%81%AE%E5%BA%8A%E3%81%AE%E3%82%AF%E3%83%AD%E3%83%BC%E3%82%BA%E3%82%A2%E3%83%83%E3%83%97%E3%83%93%E3%83%A5%E3%83%BC-cPZ21gvclO8)
+Concrete texture sourced from [Unsplash](https://unsplash.com/photos/cPZ21gvclO8). Original photography graciously provided under the Unsplash License.
 
 
