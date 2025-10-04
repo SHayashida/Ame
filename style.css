@@ -11,6 +11,8 @@ body, html {
     font-family: 'Noto Sans JP', 'Hiragino Sans', 'Yu Gothic', sans-serif;
     background-color: #0d0f13;
     color: #f5f7fa;
+    color-scheme: light;
+    forced-color-adjust: none;
 }
 
 .viewport {

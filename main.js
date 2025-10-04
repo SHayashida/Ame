@@ -43,7 +43,8 @@ const CONFIG = {
 	overlay: {
 		dropletAlpha: 0.42,
 		tailMaxRatio: 0.14,
-		flashLifeMs: 520
+		flashLifeMs: 520,
+		maxFlashes: 80
 	}
 };
 
@@ -347,7 +348,9 @@ function updateDroplets(delta) {
 			droplet.y < -20 || droplet.y > height + 20
 		) {
 			droplets.splice(i, 1);
-			dropletPool.push(droplet);
+			if (dropletPool.length < CONFIG.rain.maxDroplets * 1.5) {
+				dropletPool.push(droplet);
+			}
 			continue;
 		}
 
@@ -356,15 +359,19 @@ function updateDroplets(delta) {
 			const hitY = clamp(droplet.y, 0, height - 1);
 			const splashRadius = droplet.radius * randomRange(2.6, 3.4);
 			splashAt(hitX, hitY, splashRadius, droplet.strength);
-			impactFlashes.push({
-				x: hitX,
-				y: hitY,
-				radius: splashRadius * 2.4,
-				strength: clamp01(droplet.strength),
-				life: CONFIG.overlay.flashLifeMs
-			});
+			if (impactFlashes.length < CONFIG.overlay.maxFlashes) {
+				impactFlashes.push({
+					x: hitX,
+					y: hitY,
+					radius: splashRadius * 2.4,
+					strength: clamp01(droplet.strength),
+					life: CONFIG.overlay.flashLifeMs
+				});
+			}
 			droplets.splice(i, 1);
-			dropletPool.push(droplet);
+			if (dropletPool.length < CONFIG.rain.maxDroplets * 1.5) {
+				dropletPool.push(droplet);
+			}
 		}
 	}
 }
