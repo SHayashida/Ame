@@ -6,17 +6,17 @@ const ctx = canvas.getContext('2d', { willReadFrequently: true });
 
 const CONFIG = {
 	rain: {
-		baseDensity: 2.8,
-		intensityRampMs: 36000,
-		maxDroplets: 520,
+		baseDensity: 1.8,
+		intensityRampMs: 48000,
+		maxDroplets: 420,
 		spawnHeightMin: 0.06,
 		spawnHeightMax: 0.2,
 		radiusMin: 2.2,
 		radiusMax: 5.2,
-		initialSpeedMin: 0.22,
-		initialSpeedMax: 0.36,
-		gravity: 0.0048,
-		windVariance: 0.00045
+		initialSpeedMin: 0.16,
+		initialSpeedMax: 0.28,
+		gravity: 0.0032,
+		windVariance: 0.0003
 	},
 	wetting: {
 		depositScale: 0.92,
@@ -550,10 +550,10 @@ function renderOverlays() {
 
 	if (impactFlashes.length) {
 		ctx.save();
-		ctx.globalCompositeOperation = 'lighter';
+		ctx.globalCompositeOperation = 'multiply';
 		for (const flash of impactFlashes) {
 			const t = clamp01(flash.life / CONFIG.overlay.flashLifeMs);
-			const alpha = t * flash.strength * 0.6;
+			const alpha = t * flash.strength * 0.4;
 			if (alpha <= 0.01) continue;
 			const radius = flash.radius * (1.2 - t * 0.6);
 			const gradient = ctx.createRadialGradient(
@@ -564,9 +564,9 @@ function renderOverlays() {
 				flash.y,
 				radius
 			);
-			gradient.addColorStop(0, `rgba(190, 210, 255, ${alpha})`);
-			gradient.addColorStop(0.7, `rgba(120, 150, 210, ${alpha * 0.45})`);
-			gradient.addColorStop(1, 'rgba(0, 0, 0, 0)');
+			gradient.addColorStop(0, `rgba(20, 24, 28, ${alpha * 0.8})`);
+			gradient.addColorStop(0.7, `rgba(35, 38, 42, ${alpha * 0.5})`);
+			gradient.addColorStop(1, 'rgba(60, 62, 65, 0)');
 			ctx.fillStyle = gradient;
 			ctx.fillRect(flash.x - radius, flash.y - radius, radius * 2, radius * 2);
 		}
