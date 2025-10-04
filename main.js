@@ -1,50 +1,64 @@
-// スーパーエンジニアチームによる実装（改）
-// 雨がコンクリートのL型街渠を濡らし、熱で乾いていく瞬間を描画するデジタルアート
+// Top-down rainfall simulation on a concrete slab
+// 雨粒が上空から落下し、コンクリート面に染み込み、蒸発していく様子を描画する
 
 const canvas = document.getElementById('artCanvas');
 const ctx = canvas.getContext('2d', { willReadFrequently: true });
 
 const CONFIG = {
-    rain: {
-        baseDensity: 2.4,                // 1フレームあたりの平均生成数（雨強度により変化）
-        intensityRampMs: 45000,          // 全面が濡れるまでの雨量上昇時間
-        gravityWall: 0.0028,             // 壁面を滑る雨粒の重力加速度
-        gravityAir: 0.0042,              // 空中を落ちる雨粒の重力加速度
-        wallMaxSpeed: 0.72,
-        floorMinSpeed: 0.045,
-        wallSpawnWeight: 0.62,
-        radiusMin: 3,
-        radiusMax: 8,
-        maxDroplets: 420
-    },
-    wetting: {
-        depositScale: 0.78,
-        cornerBoost: 1.45,
-        streakStretch: 2.1,
-        floorStretch: 1.6,
-        saturationCap: 1.3,
-        spreadSamples: 900,
-        spreadRate: 0.12
-    },
-    evaporation: {
-        baseRate: 0.000035,
-        variance: 0.00008,
-        heatPulseAmplitude: 0.00002,
-        heatPulsePeriodMs: 16000
-    },
-    shading: {
-        darkening: 0.55,
-        coldTint: 0.22,
-        specular: 0.45,
-        ambientFog: 0.05
-    }
+	rain: {
+		baseDensity: 2.8,
+		intensityRampMs: 36000,
+		maxDroplets: 520,
+		spawnHeightMin: 0.06,
+		spawnHeightMax: 0.2,
+		radiusMin: 2.2,
+		radiusMax: 5.2,
+		initialSpeedMin: 0.22,
+		initialSpeedMax: 0.36,
+		gravity: 0.0048,
+		windVariance: 0.00045
+	},
+	wetting: {
+		depositScale: 0.92,
+		saturationCap: 1.4,
+		diffusionSamples: 1400,
+		diffusionRate: 0.18,
+		diffusionThreshold: 0.08,
+		microChannelStrength: 0.35,
+		ringFalloff: 0.55
+	},
+	evaporation: {
+		baseRate: 0.000045,
+		variance: 0.00012,
+		heatPulseAmplitude: 0.000025,
+		heatPulsePeriodMs: 24000
+	},
+	shading: {
+		darkening: 0.58,
+		coldTint: 0.18,
+		specular: 0.55,
+		ambientLift: 0.08,
+		edgeDarken: 0.22
+	},
+	overlay: {
+		dropletAlpha: 0.42,
+		tailMaxRatio: 0.14,
+		flashLifeMs: 520
+	}
+};
+
+const FLOW = {
+	drainX: 0.78,
+	drainY: 0.84,
+	bias: 0.55
 };
 
 let displayWidth = 0;
 let displayHeight = 0;
 let pixelRatio = 1;
-let width = 0;
-let height = 0;
+let width = 1;
+let height = 1;
+let fallScale = 1;
 let totalPixels = 0;
 
 let baseImageData = null;
@@ -55,500 +69,530 @@ let absorptionMap = null;
 let highlightMap = null;
 
 let animationReady = false;
+let pendingRebuild = true;
+let textureReady = false;
+
 let lastTimestamp = performance.now();
 let rainIntensity = 0;
 let rainAccumulator = 0;
 let heatPulseTime = 0;
-let pendingRebuild = true;
 
 const droplets = [];
 const dropletPool = [];
-
-const geometry = {
-    wallWidth: 0,
-    wallTopOffset: 0,
-    floorHeight: 0,
-    cornerSoftness: 0,
-    cornerX: 0,
-    cornerY: 0
-};
+const impactFlashes = [];
 
 const textureImage = new Image();
 textureImage.src = 'concrete.jpeg';
-let textureReady = false;
-
 textureImage.addEventListener('load', () => {
-    textureReady = true;
-    pendingRebuild = true;
+	textureReady = true;
+	pendingRebuild = true;
 });
-
 textureImage.addEventListener('error', () => {
-    console.warn('テクスチャ画像(concrete.jpeg)の読み込みに失敗しました。ノイズベースで描画します。');
-    textureReady = false;
-    pendingRebuild = true;
+	console.warn('テクスチャ画像(concrete.jpeg)の読み込みに失敗しました。ノイズベースで描画します。');
+	textureReady = false;
+	pendingRebuild = true;
 });
 
 window.addEventListener('resize', () => {
-    pendingRebuild = true;
+	pendingRebuild = true;
 });
 
 requestAnimationFrame(loop);
 
 function loop(timestamp) {
-    if (pendingRebuild) {
-        rebuild();
-        pendingRebuild = false;
-    }
+	if (pendingRebuild) {
+		rebuild();
+		pendingRebuild = false;
+	}
 
-    if (!animationReady) {
-        requestAnimationFrame(loop);
-        return;
-    }
+	if (!animationReady) {
+		requestAnimationFrame(loop);
+		return;
+	}
 
-    const delta = Math.min(48, timestamp - lastTimestamp || 16);
-    lastTimestamp = timestamp;
+	const delta = Math.min(48, timestamp - lastTimestamp || 16);
+	lastTimestamp = timestamp;
 
-    updateSimulation(delta);
-    renderFrame();
+	updateSimulation(delta);
+	renderFrame();
 
-    requestAnimationFrame(loop);
+	requestAnimationFrame(loop);
 }
 
 function rebuild() {
-    resizeCanvas();
-    configureGeometry();
-    allocateFields();
-    composeBaseTexture(textureReady ? textureImage : null);
-    animationReady = Boolean(baseImageData);
-    rainIntensity = 0;
-    rainAccumulator = 0;
-    heatPulseTime = 0;
-    droplets.length = 0;
+	resizeCanvas();
+	allocateFields();
+	composeBaseTexture(textureReady ? textureImage : null);
+
+	animationReady = Boolean(baseImageData);
+	rainIntensity = 0;
+	rainAccumulator = 0;
+	heatPulseTime = 0;
+	droplets.length = 0;
+	impactFlashes.length = 0;
 }
 
 function resizeCanvas() {
-    displayWidth = window.innerWidth;
-    displayHeight = window.innerHeight;
-    pixelRatio = Math.min(window.devicePixelRatio || 1, 2);
+	displayWidth = window.innerWidth;
+	displayHeight = window.innerHeight;
+	pixelRatio = Math.min(window.devicePixelRatio || 1, 2);
 
-    canvas.style.width = `${displayWidth}px`;
-    canvas.style.height = `${displayHeight}px`;
+	canvas.style.width = `${displayWidth}px`;
+	canvas.style.height = `${displayHeight}px`;
 
-    width = Math.max(Math.floor(displayWidth * pixelRatio), 1);
-    height = Math.max(Math.floor(displayHeight * pixelRatio), 1);
-    totalPixels = width * height;
+	width = Math.max(Math.floor(displayWidth * pixelRatio), 1);
+	height = Math.max(Math.floor(displayHeight * pixelRatio), 1);
+	fallScale = Math.max(width, height);
+	totalPixels = width * height;
 
-    canvas.width = width;
-    canvas.height = height;
-}
-
-function configureGeometry() {
-    geometry.wallWidth = Math.floor(width * 0.32);
-    geometry.wallTopOffset = Math.floor(height * 0.12);
-    geometry.floorHeight = Math.floor(height * 0.66);
-    geometry.cornerSoftness = Math.floor(width * 0.06);
-    geometry.cornerX = geometry.wallWidth;
-    geometry.cornerY = geometry.floorHeight;
+	canvas.width = width;
+	canvas.height = height;
 }
 
 function allocateFields() {
-    wetMap = new Float32Array(totalPixels);
-    evaporationMap = new Float32Array(totalPixels);
-    absorptionMap = new Float32Array(totalPixels);
-    highlightMap = new Float32Array(totalPixels);
-    outputImageData = ctx.createImageData(width, height);
+	wetMap = new Float32Array(totalPixels);
+	evaporationMap = new Float32Array(totalPixels);
+	absorptionMap = new Float32Array(totalPixels);
+	highlightMap = new Float32Array(totalPixels);
+	outputImageData = ctx.createImageData(width, height);
 }
 
 function composeBaseTexture(image) {
-    const offscreen = document.createElement('canvas');
-    offscreen.width = width;
-    offscreen.height = height;
-    const offCtx = offscreen.getContext('2d');
+	const offscreen = document.createElement('canvas');
+	offscreen.width = width;
+	offscreen.height = height;
+	const offCtx = offscreen.getContext('2d');
 
-    // ベースのコンクリート質感を描画
-    if (image) {
-        const pattern = offCtx.createPattern(image, 'repeat');
-        if (pattern) {
-            offCtx.fillStyle = pattern;
-            offCtx.fillRect(0, 0, width, height);
-        }
-    }
+	paintBaseConcrete(offCtx);
 
-    if (!image || offCtx.getImageData(0, 0, 1, 1).data.every(channel => channel === 0)) {
-        drawProceduralConcrete(offCtx);
-    }
+	if (image && image.width > 0 && image.height > 0) {
+		const scale = Math.max(width / image.width, height / image.height);
+		const drawWidth = image.width * scale;
+		const drawHeight = image.height * scale;
+		const offsetX = (width - drawWidth) / 2;
+		const offsetY = (height - drawHeight) / 2;
+		offCtx.save();
+		offCtx.globalAlpha = 0.72;
+		offCtx.globalCompositeOperation = 'overlay';
+		offCtx.drawImage(image, offsetX, offsetY, drawWidth, drawHeight);
+		offCtx.restore();
+	}
 
-    // L型街渠の壁面と床面を描画
-    drawLShapeShading(offCtx);
+	applyConcreteNoise(offCtx);
+	drawCracks(offCtx);
+	drawEdgeVignette(offCtx);
 
-    baseImageData = offCtx.getImageData(0, 0, width, height);
-    buildSupportMaps();
+	baseImageData = offCtx.getImageData(0, 0, width, height);
+	outputImageData = ctx.createImageData(width, height);
+
+	buildSupportMaps();
 }
 
-function drawProceduralConcrete(context) {
-    const baseColor = [82, 84, 88];
-    const secondary = [96, 98, 104];
-    const noiseStrength = 24;
-    const imageData = context.createImageData(width, height);
-    const data = imageData.data;
-
-    for (let y = 0; y < height; y++) {
-        for (let x = 0; x < width; x++) {
-            const index = (y * width + x) * 4;
-            const n = fract(Math.sin((x * 12.9898 + y * 78.233) * 43758.5453) * 43758.5453);
-            const mix = Math.pow(n, 1.3);
-            data[index] = lerp(baseColor[0], secondary[0], mix) + (n - 0.5) * noiseStrength;
-            data[index + 1] = lerp(baseColor[1], secondary[1], mix) + (n - 0.5) * noiseStrength;
-            data[index + 2] = lerp(baseColor[2], secondary[2], mix) + (n - 0.5) * noiseStrength;
-            data[index + 3] = 255;
-        }
-    }
-
-    context.putImageData(imageData, 0, 0);
+function paintBaseConcrete(context) {
+	const gradient = context.createLinearGradient(0, 0, width * 0.6, height * 0.8);
+	gradient.addColorStop(0, '#6d7076');
+	gradient.addColorStop(1, '#4a4d52');
+	context.fillStyle = gradient;
+	context.fillRect(0, 0, width, height);
 }
 
-function drawLShapeShading(context) {
-    const wallPath = new Path2D();
-    wallPath.moveTo(0, 0);
-    wallPath.lineTo(geometry.wallWidth, geometry.wallTopOffset);
-    wallPath.lineTo(geometry.wallWidth, height);
-    wallPath.lineTo(0, height);
-    wallPath.closePath();
+function applyConcreteNoise(context) {
+	const imageData = context.getImageData(0, 0, width, height);
+	const data = imageData.data;
 
-    context.save();
-    context.clip(wallPath);
-    const wallGradient = context.createLinearGradient(0, 0, geometry.wallWidth * 0.8, height);
-    wallGradient.addColorStop(0, 'rgba(220, 225, 235, 0.14)');
-    wallGradient.addColorStop(0.28, 'rgba(180, 186, 194, 0.08)');
-    wallGradient.addColorStop(1, 'rgba(25, 28, 32, 0.45)');
-    context.globalCompositeOperation = 'overlay';
-    context.fillStyle = wallGradient;
-    context.fillRect(0, 0, geometry.wallWidth + 2, height);
-    context.restore();
+	for (let y = 0; y < height; y++) {
+		for (let x = 0; x < width; x++) {
+			const idx = (y * width + x) * 4;
+			const grain = (hash(x * 0.9, y * 1.1) - 0.5) * 32;
+			const shade = (hash(y * 1.7, x * 0.6) - 0.5) * 24;
+			data[idx] = clamp255(data[idx] + grain + shade * 0.6);
+			data[idx + 1] = clamp255(data[idx + 1] + grain * 0.9 + shade * 0.5);
+			data[idx + 2] = clamp255(data[idx + 2] + grain * 0.8 - shade * 0.35);
+		}
+	}
 
-    const floorPath = new Path2D();
-    floorPath.moveTo(geometry.wallWidth, geometry.wallTopOffset);
-    floorPath.lineTo(width, geometry.floorHeight - geometry.cornerSoftness);
-    floorPath.lineTo(width, height);
-    floorPath.lineTo(0, height);
-    floorPath.lineTo(0, height - geometry.cornerSoftness * 1.4);
-    floorPath.closePath();
+	context.putImageData(imageData, 0, 0);
+}
 
-    context.save();
-    context.clip(floorPath);
-    const floorGradient = context.createLinearGradient(geometry.wallWidth, geometry.floorHeight, width, height);
-    floorGradient.addColorStop(0, 'rgba(200, 205, 210, 0.16)');
-    floorGradient.addColorStop(0.4, 'rgba(80, 82, 86, 0.12)');
-    floorGradient.addColorStop(1, 'rgba(15, 18, 22, 0.38)');
-    context.globalCompositeOperation = 'overlay';
-    context.fillStyle = floorGradient;
-    context.fillRect(geometry.wallWidth - geometry.cornerSoftness, geometry.floorHeight - geometry.cornerSoftness * 2, width, height);
-    context.restore();
+function drawCracks(context) {
+	context.save();
+	context.lineWidth = Math.max(1, fallScale * 0.0012);
+	context.strokeStyle = 'rgba(18, 20, 24, 0.35)';
+	context.globalCompositeOperation = 'multiply';
+	const crackCount = Math.floor(18 + Math.sqrt(fallScale) * 0.12);
+	for (let i = 0; i < crackCount; i++) {
+		const length = randomRange(fallScale * 0.18, fallScale * 0.42);
+		let x = randomRange(width * 0.08, width * 0.92);
+		let y = randomRange(height * 0.08, height * 0.92);
+		context.beginPath();
+		context.moveTo(x, y);
+		let angle = randomRange(0, Math.PI * 2);
+		const segments = 5 + Math.floor(Math.random() * 6);
+		for (let s = 0; s < segments; s++) {
+			angle += randomRange(-Math.PI / 12, Math.PI / 12);
+			x += Math.cos(angle) * (length / segments);
+			y += Math.sin(angle) * (length / segments);
+			context.lineTo(x, y);
+		}
+		context.stroke();
+	}
+	context.restore();
+}
 
-    context.globalCompositeOperation = 'source-over';
-    context.lineWidth = Math.max(width * 0.0025, 2);
-    context.strokeStyle = 'rgba(255,255,255,0.16)';
-    context.beginPath();
-    context.moveTo(geometry.wallWidth, geometry.wallTopOffset);
-    context.lineTo(geometry.wallWidth, height);
-    context.lineTo(width, geometry.floorHeight);
-    context.stroke();
-
-    context.strokeStyle = 'rgba(0,0,0,0.45)';
-    context.beginPath();
-    context.moveTo(geometry.wallWidth, geometry.wallTopOffset + context.lineWidth * 1.2);
-    context.lineTo(geometry.wallWidth, height);
-    context.lineTo(width, geometry.floorHeight - context.lineWidth * 1.2);
-    context.stroke();
+function drawEdgeVignette(context) {
+	context.save();
+	const radial = context.createRadialGradient(
+		width * 0.5,
+		height * 0.5,
+		fallScale * 0.05,
+		width * 0.5,
+		height * 0.5,
+		fallScale * 0.7
+	);
+	radial.addColorStop(0, 'rgba(255, 255, 255, 0.08)');
+	radial.addColorStop(0.45, 'rgba(200, 205, 210, 0.02)');
+	radial.addColorStop(1, 'rgba(0, 0, 0, 0.45)');
+	context.globalCompositeOperation = 'overlay';
+	context.fillStyle = radial;
+	context.fillRect(0, 0, width, height);
+	context.restore();
 }
 
 function buildSupportMaps() {
-    const baseData = baseImageData.data;
-    for (let y = 0; y < height; y++) {
-        const ny = y / Math.max(1, height - 1);
-        for (let x = 0; x < width; x++) {
-            const nx = x / Math.max(1, width - 1);
-            const index = y * width + x;
+	const baseData = baseImageData.data;
+	const centerX = width * 0.5;
+	const centerY = height * 0.5;
+	const drainX = width * FLOW.drainX;
+	const drainY = height * FLOW.drainY;
 
-            const wallInfluence = clamp01(1 - (x / Math.max(1, geometry.wallWidth + geometry.cornerSoftness)));
-            const floorInfluence = clamp01((y - geometry.floorHeight + geometry.cornerSoftness * nx) / Math.max(1, height - geometry.floorHeight + geometry.cornerSoftness));
+	for (let y = 0; y < height; y++) {
+		for (let x = 0; x < width; x++) {
+			const index = y * width + x;
+			const nx = (x + 0.5) / width;
+			const ny = (y + 0.5) / height;
+			const edge = Math.max(Math.abs(nx - 0.5), Math.abs(ny - 0.5));
+			const radial = Math.hypot(x - centerX, y - centerY) / fallScale;
+			const tonal = (baseData[index * 4] + baseData[index * 4 + 1] + baseData[index * 4 + 2]) / (255 * 3);
+			const microChannel = Math.abs(Math.sin(x * 0.015) + Math.cos(y * 0.02));
+			const slope = Math.hypot(drainX - x, drainY - y) / fallScale;
 
-            const cornerDistance = Math.hypot(x - geometry.cornerX, y - geometry.cornerY);
-            const cornerHighlight = clamp01(1 - cornerDistance / (Math.min(width, height) * 0.9));
+			highlightMap[index] = clamp01(
+				CONFIG.shading.ambientLift +
+				(1 - edge) * 0.35 +
+				(1 - radial * 1.2) * 0.28 +
+				tonal * 0.18
+			);
 
-            const wallSpec = wallInfluence * (0.45 + 0.25 * (1 - ny));
-            const floorSpec = floorInfluence * (0.28 + 0.2 * nx);
-            highlightMap[index] = clamp01(cornerHighlight * 0.45 + wallSpec + floorSpec + CONFIG.shading.ambientFog);
+			absorptionMap[index] = (0.55 + tonal * 0.35 + microChannel * CONFIG.wetting.microChannelStrength) *
+				(0.9 + (1 - edge) * 0.25);
 
-            const absorptionWall = 0.38 + wallInfluence * 0.45;
-            const absorptionFloor = 0.52 + floorInfluence * 0.55;
-            const aggregateAbsorption = lerp(absorptionWall, absorptionFloor, smoothStep(0, 1, floorInfluence));
-            absorptionMap[index] = aggregateAbsorption;
-
-            const evaporationBias = CONFIG.evaporation.baseRate + CONFIG.evaporation.variance * (0.35 + 0.65 * (1 - floorInfluence) + 0.45 * wallInfluence);
-            const noise = (baseData[index * 4] + baseData[index * 4 + 1] + baseData[index * 4 + 2]) / (255 * 3);
-            evaporationMap[index] = evaporationBias * (0.75 + noise * 0.5);
-        }
-    }
+			evaporationMap[index] = CONFIG.evaporation.baseRate +
+				CONFIG.evaporation.variance * (0.3 + tonal * 0.7) +
+				CONFIG.evaporation.baseRate * (edge * CONFIG.shading.edgeDarken + slope * 0.55);
+		}
+	}
 }
 
 function updateSimulation(delta) {
-    accelerateRainIntensity(delta);
-    spawnRain(delta);
-    updateDroplets(delta);
-    evaporate(delta);
-    capillaryFlow();
+	accelerateRainIntensity(delta);
+	spawnDroplets(delta);
+	updateDroplets(delta);
+	evaporate(delta);
+	diffuseWetness();
+	updateImpactFlashes(delta);
 }
 
 function accelerateRainIntensity(delta) {
-    rainIntensity = clamp01(rainIntensity + delta / CONFIG.rain.intensityRampMs);
+	rainIntensity = clamp01(rainIntensity + delta / CONFIG.rain.intensityRampMs);
 }
 
-function spawnRain(delta) {
-    const targetDrops = CONFIG.rain.baseDensity * rainIntensity * delta;
-    rainAccumulator += targetDrops;
-    const spawnCount = Math.floor(rainAccumulator);
-    rainAccumulator -= spawnCount;
+function spawnDroplets(delta) {
+	const targetDrops = CONFIG.rain.baseDensity * rainIntensity * delta;
+	rainAccumulator += targetDrops;
+	const spawnCount = Math.floor(rainAccumulator);
+	rainAccumulator -= spawnCount;
 
-    for (let i = 0; i < spawnCount; i++) {
-        if (droplets.length >= CONFIG.rain.maxDroplets) break;
-        const spawnWall = Math.random() < CONFIG.rain.wallSpawnWeight;
-        const droplet = dropletPool.pop() || {};
-        initializeDroplet(droplet, spawnWall ? 'wall' : 'floor');
-        droplets.push(droplet);
-    }
+	for (let i = 0; i < spawnCount; i++) {
+		if (droplets.length >= CONFIG.rain.maxDroplets) break;
+		const droplet = dropletPool.pop() || {};
+		initialiseDroplet(droplet);
+		droplets.push(droplet);
+	}
 }
 
-function initializeDroplet(droplet, surface) {
-    droplet.surface = surface;
-    droplet.radius = randomRange(CONFIG.rain.radiusMin, CONFIG.rain.radiusMax) * pixelRatio;
-    droplet.strength = randomRange(0.6, 1.2);
-    droplet.life = randomRange(1200, 3400);
-    droplet.vx = 0;
-    droplet.vy = 0;
-    droplet.hasSplashed = false;
-
-    if (surface === 'wall') {
-        droplet.x = randomRange(geometry.wallWidth * 0.18, geometry.wallWidth * 0.92);
-        droplet.y = -randomRange(0, height * 0.08);
-        droplet.vy = randomRange(0.18, 0.35) * pixelRatio;
-        droplet.vx = randomRange(-0.08, 0.08) * pixelRatio;
-    } else {
-        droplet.x = randomRange(geometry.wallWidth * 0.9, width - width * 0.05);
-        droplet.y = -randomRange(0, height * 0.12);
-        droplet.vy = randomRange(0.55, 0.75) * pixelRatio;
-        droplet.vx = randomRange(-0.2, 0.12) * pixelRatio;
-    }
+function initialiseDroplet(droplet) {
+	const spawnPaddingX = width * 0.05;
+	const spawnPaddingY = height * 0.05;
+	droplet.x = randomRange(spawnPaddingX, width - spawnPaddingX);
+	droplet.y = randomRange(spawnPaddingY, height - spawnPaddingY);
+	droplet.height = randomRange(CONFIG.rain.spawnHeightMin, CONFIG.rain.spawnHeightMax) * fallScale;
+	droplet.radius = randomRange(CONFIG.rain.radiusMin, CONFIG.rain.radiusMax) * pixelRatio;
+	droplet.strength = randomRange(0.65, 1.25);
+	droplet.vz = randomRange(CONFIG.rain.initialSpeedMin, CONFIG.rain.initialSpeedMax) * fallScale;
+	droplet.windX = (Math.random() - 0.5) * CONFIG.rain.windVariance * width;
+	droplet.windY = (Math.random() - 0.5) * CONFIG.rain.windVariance * height;
 }
 
 function updateDroplets(delta) {
-    for (let i = droplets.length - 1; i >= 0; i--) {
-        const droplet = droplets[i];
-        droplet.life -= delta;
+	for (let i = droplets.length - 1; i >= 0; i--) {
+		const droplet = droplets[i];
+		droplet.x += droplet.windX * delta;
+		droplet.y += droplet.windY * delta;
+		droplet.vz += CONFIG.rain.gravity * fallScale * delta;
+		droplet.height -= droplet.vz * delta;
 
-        if (droplet.surface === 'wall') {
-            updateWallDroplet(droplet, delta);
-        } else {
-            updateFloorDroplet(droplet, delta);
-        }
+		if (
+			droplet.x < -20 || droplet.x > width + 20 ||
+			droplet.y < -20 || droplet.y > height + 20
+		) {
+			droplets.splice(i, 1);
+			dropletPool.push(droplet);
+			continue;
+		}
 
-        if (
-            droplet.life <= 0 ||
-            droplet.y > height + 20 ||
-            droplet.x < -40 || droplet.x > width + 40
-        ) {
-            if (!droplet.hasSplashed && droplet.surface === 'floor') {
-                splashAt(droplet.x, droplet.y, droplet.radius * 1.4, droplet.strength * 1.2, CONFIG.wetting.floorStretch, 1.05);
-            }
-            droplets.splice(i, 1);
-            dropletPool.push(droplet);
-        }
-    }
+		if (droplet.height <= 0) {
+			const hitX = clamp(droplet.x, 0, width - 1);
+			const hitY = clamp(droplet.y, 0, height - 1);
+			const splashRadius = droplet.radius * randomRange(2.6, 3.4);
+			splashAt(hitX, hitY, splashRadius, droplet.strength);
+			impactFlashes.push({
+				x: hitX,
+				y: hitY,
+				radius: splashRadius * 2.4,
+				strength: clamp01(droplet.strength),
+				life: CONFIG.overlay.flashLifeMs
+			});
+			droplets.splice(i, 1);
+			dropletPool.push(droplet);
+		}
+	}
 }
 
-function updateWallDroplet(droplet, delta) {
-    droplet.vy = Math.min(droplet.vy + CONFIG.rain.gravityWall * delta, CONFIG.rain.wallMaxSpeed);
-    droplet.x += droplet.vx * delta;
-    droplet.y += droplet.vy * delta;
-    droplet.vx *= 0.955;
+function splashAt(cx, cy, radius, strength) {
+	if (radius <= 0 || strength <= 0) return;
 
-    if (droplet.y >= geometry.wallTopOffset) {
-        droplet.vx += (Math.random() - 0.5) * 0.012 * pixelRatio;
-    }
+	const minX = Math.max(0, Math.floor(cx - radius));
+	const maxX = Math.min(width - 1, Math.ceil(cx + radius));
+	const minY = Math.max(0, Math.floor(cy - radius));
+	const maxY = Math.min(height - 1, Math.ceil(cy + radius));
 
-    sprinkleStreak(droplet.x, droplet.y, droplet.radius, droplet.strength);
+	for (let y = minY; y <= maxY; y++) {
+		const dy = (y - cy) / radius;
+		for (let x = minX; x <= maxX; x++) {
+			const dx = (x - cx) / radius;
+			const distSq = dx * dx + dy * dy;
+			if (distSq > 1) continue;
 
-    const handoffLine = geometry.floorHeight - geometry.cornerSoftness * 0.6;
-    if (droplet.y >= handoffLine) {
-        droplet.surface = 'floor';
-        droplet.y = handoffLine + droplet.radius * 0.6;
-        droplet.vx = Math.max(droplet.vx, randomRange(0.15, 0.45) * pixelRatio);
-        droplet.vy = randomRange(CONFIG.rain.floorMinSpeed, CONFIG.rain.floorMinSpeed * 1.8);
-        droplet.radius *= randomRange(1.08, 1.26);
-        splashAt(droplet.x, droplet.y + droplet.radius * 0.5, droplet.radius * 1.3, droplet.strength * 1.3, CONFIG.wetting.floorStretch, 0.9);
-        droplet.hasSplashed = true;
-    }
-}
-
-function updateFloorDroplet(droplet, delta) {
-    droplet.vy = Math.max(droplet.vy - 0.0008 * delta, CONFIG.rain.floorMinSpeed);
-    droplet.x += droplet.vx * delta;
-    droplet.y += droplet.vy * delta;
-    droplet.vx *= 0.985;
-    droplet.vx += (Math.random() - 0.5) * 0.0009 * delta * pixelRatio;
-
-    sprinkleFlow(droplet.x, droplet.y, droplet.radius, droplet.strength);
-}
-
-function sprinkleStreak(x, y, radius, strength) {
-    splashAt(x, y, radius * 0.9, strength * 0.42, 0.6, CONFIG.wetting.streakStretch);
-    splashAt(x + radius * 0.3, y + radius * 0.4, radius * 0.6, strength * 0.25, 0.75, CONFIG.wetting.streakStretch * 1.2);
-}
-
-function sprinkleFlow(x, y, radius, strength) {
-    splashAt(x, y, radius, strength * 0.55, CONFIG.wetting.floorStretch, 1);
-    splashAt(x - radius * 0.8, y - radius * 1.2, radius * 0.5, strength * 0.22, CONFIG.wetting.floorStretch * 1.4, 0.6);
-}
-
-function splashAt(cx, cy, radius, intensity, stretchX, stretchY) {
-    if (!radius || intensity <= 0) return;
-    if (cx < -radius || cy < -radius || cx > width + radius || cy > height + radius) return;
-
-    const sx = stretchX || 1;
-    const sy = stretchY || 1;
-    const minX = Math.max(0, Math.floor(cx - radius * sx));
-    const maxX = Math.min(width - 1, Math.ceil(cx + radius * sx));
-    const minY = Math.max(0, Math.floor(cy - radius * sy));
-    const maxY = Math.min(height - 1, Math.ceil(cy + radius * sy));
-
-    for (let y = minY; y <= maxY; y++) {
-        const dy = (y - cy) / (radius * sy);
-        for (let x = minX; x <= maxX; x++) {
-            const dx = (x - cx) / (radius * sx);
-            const distSq = dx * dx + dy * dy;
-            if (distSq > 1) continue;
-
-            const index = y * width + x;
-            const falloff = (1 - Math.sqrt(distSq)) * intensity * CONFIG.wetting.depositScale;
-            const absorption = absorptionMap[index] * (1 + highlightMap[index] * 0.25);
-            const boost = cornerBoostFactor(x, y);
-            wetMap[index] = Math.min(CONFIG.wetting.saturationCap, wetMap[index] + falloff * absorption * boost);
-        }
-    }
-}
-
-function cornerBoostFactor(x, y) {
-    const dx = x - geometry.cornerX;
-    const dy = y - geometry.cornerY;
-    const dist = Math.max(1, Math.hypot(dx, dy));
-    return 1 + CONFIG.wetting.cornerBoost * Math.pow(Math.max(0, 1 - dist / (Math.min(width, height) * 0.55)), 2.6);
+			const index = y * width + x;
+			const distance = Math.sqrt(distSq);
+			const ring = Math.pow(distance, CONFIG.wetting.ringFalloff);
+			const deposit = (1 - distance) * (0.7 + (1 - ring) * 0.3);
+			const absorption = absorptionMap[index];
+			wetMap[index] = Math.min(
+				CONFIG.wetting.saturationCap,
+				wetMap[index] + deposit * strength * CONFIG.wetting.depositScale * absorption
+			);
+		}
+	}
 }
 
 function evaporate(delta) {
-    heatPulseTime += delta;
-    const heatPulse = CONFIG.evaporation.heatPulseAmplitude * (Math.sin((heatPulseTime % CONFIG.evaporation.heatPulsePeriodMs) / CONFIG.evaporation.heatPulsePeriodMs * Math.PI * 2) * 0.5 + 0.5);
+	heatPulseTime += delta;
+	const phase = (heatPulseTime % CONFIG.evaporation.heatPulsePeriodMs) / CONFIG.evaporation.heatPulsePeriodMs;
+	const heatPulse = CONFIG.evaporation.heatPulseAmplitude * (Math.sin(phase * Math.PI * 2) * 0.5 + 0.5);
 
-    for (let i = 0; i < totalPixels; i++) {
-        const loss = (evaporationMap[i] + heatPulse) * delta;
-        wetMap[i] = Math.max(0, wetMap[i] - loss);
-    }
+	for (let i = 0; i < totalPixels; i++) {
+		const loss = (evaporationMap[i] + heatPulse) * delta;
+		wetMap[i] = Math.max(0, wetMap[i] - loss);
+	}
 }
 
-function capillaryFlow() {
-    const iterations = Math.floor(CONFIG.wetting.spreadSamples * rainIntensity);
-    if (iterations < 1) return;
+function diffuseWetness() {
+	const iterations = Math.floor(CONFIG.wetting.diffusionSamples * rainIntensity);
+	if (iterations < 1) return;
 
-    for (let i = 0; i < iterations; i++) {
-        const index = Math.floor(Math.random() * totalPixels);
-        const wetness = wetMap[index];
-        if (wetness < 0.12) continue;
+	for (let i = 0; i < iterations; i++) {
+		const index = Math.floor(Math.random() * totalPixels);
+		const wetness = wetMap[index];
+		if (wetness < CONFIG.wetting.diffusionThreshold) continue;
 
-        const neighborIndex = randomNeighbor(index);
-        if (neighborIndex === null) continue;
+		const neighborIndex = biasedNeighbor(index);
+		if (neighborIndex === index) continue;
 
-        const diff = wetness - wetMap[neighborIndex];
-        if (diff <= 0) continue;
+		const diff = wetness - wetMap[neighborIndex];
+		if (diff <= 0) continue;
 
-        const transfer = diff * (0.12 + CONFIG.wetting.spreadRate * Math.random());
-        wetMap[index] -= transfer;
-        wetMap[neighborIndex] = Math.min(CONFIG.wetting.saturationCap, wetMap[neighborIndex] + transfer * 0.94);
-    }
+		const transfer = diff * (0.08 + CONFIG.wetting.diffusionRate * Math.random());
+		wetMap[index] -= transfer;
+		wetMap[neighborIndex] = Math.min(CONFIG.wetting.saturationCap, wetMap[neighborIndex] + transfer * 0.96);
+	}
 }
 
-function randomNeighbor(index) {
-    const x = index % width;
-    const y = Math.floor(index / width);
-    const choices = [];
-    if (x > 0) choices.push(index - 1);
-    if (x < width - 1) choices.push(index + 1);
-    if (y > 0) choices.push(index - width);
-    if (y < height - 1) choices.push(index + width);
-    if (choices.length === 0) return null;
-    return choices[Math.floor(Math.random() * choices.length)];
+function biasedNeighbor(index) {
+	const x = index % width;
+	const y = Math.floor(index / width);
+	const neighbors = [];
+
+	if (x > 0) neighbors.push({ index: index - 1, vx: -1, vy: 0 });
+	if (x < width - 1) neighbors.push({ index: index + 1, vx: 1, vy: 0 });
+	if (y > 0) neighbors.push({ index: index - width, vx: 0, vy: -1 });
+	if (y < height - 1) neighbors.push({ index: index + width, vx: 0, vy: 1 });
+
+	if (neighbors.length === 0) return index;
+
+	const targetX = width * FLOW.drainX;
+	const targetY = height * FLOW.drainY;
+	const dirX = targetX - x;
+	const dirY = targetY - y;
+	const len = Math.hypot(dirX, dirY) || 1;
+	const nx = dirX / len;
+	const ny = dirY / len;
+
+	let totalWeight = 0;
+	for (const neighbor of neighbors) {
+		const dot = neighbor.vx * nx + neighbor.vy * ny;
+		neighbor.weight = 0.25 + Math.max(0, dot) * FLOW.bias;
+		totalWeight += neighbor.weight;
+	}
+
+	if (totalWeight <= 0) {
+		return neighbors[Math.floor(Math.random() * neighbors.length)].index;
+	}
+
+	let r = Math.random() * totalWeight;
+	for (const neighbor of neighbors) {
+		if ((r -= neighbor.weight) <= 0) {
+			return neighbor.index;
+		}
+	}
+
+	return neighbors[neighbors.length - 1].index;
+}
+
+function updateImpactFlashes(delta) {
+	for (let i = impactFlashes.length - 1; i >= 0; i--) {
+		impactFlashes[i].life -= delta;
+		if (impactFlashes[i].life <= 0) {
+			impactFlashes.splice(i, 1);
+		}
+	}
 }
 
 function renderFrame() {
-    if (!baseImageData) return;
+	if (!baseImageData) return;
 
-    const baseData = baseImageData.data;
-    const outputData = outputImageData.data;
+	const baseData = baseImageData.data;
+	const outputData = outputImageData.data;
 
-    for (let i = 0; i < totalPixels; i++) {
-        const wetness = clamp01(wetMap[i]);
-        const baseIndex = i * 4;
-        const highlight = highlightMap[i] * wetness * CONFIG.shading.specular;
+	for (let i = 0; i < totalPixels; i++) {
+		const wetness = Math.min(CONFIG.wetting.saturationCap, wetMap[i]);
+		const wetRatio = wetness / CONFIG.wetting.saturationCap;
+		const baseIndex = i * 4;
+		const highlight = highlightMap[i] * (CONFIG.shading.ambientLift + wetRatio * CONFIG.shading.specular);
 
-        let r = baseData[baseIndex];
-        let g = baseData[baseIndex + 1];
-        let b = baseData[baseIndex + 2];
-        const a = baseData[baseIndex + 3];
+		let r = baseData[baseIndex];
+		let g = baseData[baseIndex + 1];
+		let b = baseData[baseIndex + 2];
+		const a = baseData[baseIndex + 3];
 
-        const darken = 1 - wetness * CONFIG.shading.darkening;
-        r *= darken;
-        g *= darken * (1 - wetness * 0.08);
-        b *= darken * (1 - wetness * 0.18);
+		const darken = 1 - wetRatio * CONFIG.shading.darkening;
+		r *= darken;
+		g *= darken * (1 - wetRatio * 0.06);
+		b *= darken * (1 - wetRatio * 0.12);
 
-        const tint = wetness * CONFIG.shading.coldTint;
-        r -= tint * 22;
-        g -= tint * 10;
-        b += tint * 48;
+		const tint = wetRatio * CONFIG.shading.coldTint;
+		r -= tint * 16;
+		g -= tint * 8;
+		b += tint * 42;
 
-        r += highlight * 110;
-        g += highlight * 145;
-        b += highlight * 175;
+		r += highlight * 110;
+		g += highlight * 140;
+		b += highlight * 170;
 
-        outputData[baseIndex] = clamp255(r);
-        outputData[baseIndex + 1] = clamp255(g);
-        outputData[baseIndex + 2] = clamp255(b);
-        outputData[baseIndex + 3] = a;
-    }
+		outputData[baseIndex] = clamp255(r);
+		outputData[baseIndex + 1] = clamp255(g);
+		outputData[baseIndex + 2] = clamp255(b);
+		outputData[baseIndex + 3] = a;
+	}
 
-    ctx.putImageData(outputImageData, 0, 0);
+	ctx.putImageData(outputImageData, 0, 0);
+	renderOverlays();
 }
 
-// ---- Utility functions --------------------------------------------------
+function renderOverlays() {
+	if (droplets.length) {
+		ctx.save();
+		ctx.globalCompositeOperation = 'screen';
+		ctx.lineWidth = Math.max(1, pixelRatio * 1.1);
+		ctx.lineCap = 'round';
+
+		const maxTail = fallScale * CONFIG.overlay.tailMaxRatio;
+		for (const droplet of droplets) {
+			const heightRatio = clamp01(droplet.height / (fallScale * CONFIG.rain.spawnHeightMax));
+			const alpha = CONFIG.overlay.dropletAlpha * (0.2 + heightRatio);
+			if (alpha <= 0.02) continue;
+			const tail = clamp(droplet.height * 0.6, droplet.radius * 1.2, maxTail);
+
+			ctx.strokeStyle = `rgba(180, 200, 230, ${alpha})`;
+			ctx.beginPath();
+			ctx.moveTo(droplet.x, droplet.y - tail);
+			ctx.lineTo(droplet.x, droplet.y);
+			ctx.stroke();
+
+			ctx.fillStyle = `rgba(220, 235, 255, ${alpha * 1.4})`;
+			ctx.beginPath();
+			ctx.arc(droplet.x, droplet.y, Math.max(0.8, droplet.radius * 0.35), 0, Math.PI * 2);
+			ctx.fill();
+		}
+		ctx.restore();
+	}
+
+	if (impactFlashes.length) {
+		ctx.save();
+		ctx.globalCompositeOperation = 'lighter';
+		for (const flash of impactFlashes) {
+			const t = clamp01(flash.life / CONFIG.overlay.flashLifeMs);
+			const alpha = t * flash.strength * 0.6;
+			if (alpha <= 0.01) continue;
+			const radius = flash.radius * (1.2 - t * 0.6);
+			const gradient = ctx.createRadialGradient(
+				flash.x,
+				flash.y,
+				radius * 0.2,
+				flash.x,
+				flash.y,
+				radius
+			);
+			gradient.addColorStop(0, `rgba(190, 210, 255, ${alpha})`);
+			gradient.addColorStop(0.7, `rgba(120, 150, 210, ${alpha * 0.45})`);
+			gradient.addColorStop(1, 'rgba(0, 0, 0, 0)');
+			ctx.fillStyle = gradient;
+			ctx.fillRect(flash.x - radius, flash.y - radius, radius * 2, radius * 2);
+		}
+		ctx.restore();
+	}
+}
+
+function clamp(value, min, max) {
+	return value < min ? min : value > max ? max : value;
+}
 
 function clamp01(value) {
-    return value < 0 ? 0 : value > 1 ? 1 : value;
+	return value < 0 ? 0 : value > 1 ? 1 : value;
 }
 
 function clamp255(value) {
-    return value < 0 ? 0 : value > 255 ? 255 : value;
-}
-
-function lerp(a, b, t) {
-    return a + (b - a) * t;
-}
-
-function smoothStep(edge0, edge1, x) {
-    const t = clamp01((x - edge0) / (edge1 - edge0));
-    return t * t * (3 - 2 * t);
+	return value < 0 ? 0 : value > 255 ? 255 : value;
 }
 
 function randomRange(min, max) {
-    return Math.random() * (max - min) + min;
+	return Math.random() * (max - min) + min;
+}
+
+function hash(x, y) {
+	return fract(Math.sin(x * 127.1 + y * 311.7) * 43758.5453);
 }
 
 function fract(value) {
-    return value - Math.floor(value);
+	return value - Math.floor(value);
 }

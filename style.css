@@ -35,15 +35,16 @@ body, html {
 .overlay {
     pointer-events: none;
     position: absolute;
-    top: 5%;
-    left: 5%;
-    max-width: min(28rem, 90vw);
-    padding: 1.6rem 2rem;
-    background: linear-gradient(135deg, rgba(12, 16, 24, 0.7), rgba(12, 16, 24, 0.25));
-    border-radius: 16px;
-    backdrop-filter: blur(12px);
-    box-shadow: 0 24px 60px rgba(0, 0, 0, 0.35);
-    border: 1px solid rgba(255, 255, 255, 0.08);
+    top: 4%;
+    left: 50%;
+    transform: translateX(-50%);
+    max-width: min(30rem, 92vw);
+    padding: 1.6rem 2.2rem;
+    background: linear-gradient(160deg, rgba(12, 16, 24, 0.75), rgba(12, 16, 24, 0.28));
+    border-radius: 20px;
+    backdrop-filter: blur(14px);
+    box-shadow: 0 24px 60px rgba(0, 0, 0, 0.38);
+    border: 1px solid rgba(255, 255, 255, 0.1);
 }
 
 .overlay h1 {
@@ -64,7 +65,6 @@ body, html {
     .overlay {
         top: auto;
         bottom: 4%;
-        left: 50%;
         transform: translateX(-50%);
         text-align: center;
         padding: 1.2rem 1.4rem;
